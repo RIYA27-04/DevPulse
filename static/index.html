@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DevPulse - Uptime Monitor</title>
+<style>
+  :root { --bg:#0b1020; --card:#141b2f; --line:#232d4a; --text:#e8ecf6; --mute:#8b97b5; --acc:#6c8cff; --ok:#2ecc8f; --bad:#ff5d6c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+  h1 { margin:0; font-size:21px; } h1 span { color:var(--acc); }
+  .summary { display:flex; gap:16px; font-size:14px; color:var(--mute); }
+  .summary b { color:var(--text); }
+  main { max-width:980px; margin:0 auto; padding:24px; display:grid; gap:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  form { display:grid; grid-template-columns:1fr 2fr auto; gap:10px; }
+  input { background:#0d1428; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:inherit; width:100%; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:9px 16px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--text); padding:4px 10px; font-size:13px; }
+  button:disabled { opacity:.5; }
+  .err { color:var(--bad); font-size:13px; margin-top:6px; min-height:18px; }
+  .top { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .title { display:flex; align-items:center; gap:10px; font-weight:600; font-size:16px; }
+  .dot { width:11px; height:11px; border-radius:50%; background:var(--mute); }
+  .dot.up { background:var(--ok); box-shadow:0 0 8px var(--ok); } .dot.down { background:var(--bad); box-shadow:0 0 8px var(--bad); }
+  .url { color:var(--mute); font-size:13px; word-break:break-all; }
+  .stats { display:flex; gap:26px; margin:10px 0 6px; flex-wrap:wrap; }
+  .stat small { display:block; color:var(--mute); font-size:12px; } .stat b { font-size:18px; }
+  .bad { color:var(--bad); font-size:13px; }
+  svg { display:block; margin-top:6px; }
+  @media (max-width:640px) { form { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Dev<span>Pulse</span> <small style="color:var(--mute);font-weight:400;font-size:14px">uptime &amp; latency monitor</small></h1>
+  <div class="summary"><span><b id="sUp">0</b> up</span><span><b id="sDown">0</b> down</span><span>checks every <b id="sInt">-</b>s</span></div>
+</header>
+<main>
+  <section class="card">
+    <form id="f">
+      <input name="name" placeholder="Name (optional)" maxlength="60">
+      <input name="url" placeholder="https://example.com" required>
+      <button id="add">Add monitor</button>
+    </form>
+    <div class="err" id="err"></div>
+  </section>
+  <section id="list" style="display:grid;gap:14px"></section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+async function api(path, opts = {}) {
+  const r = await fetch('/api' + path, { ...opts, headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d;
+}
+
+function spark(h) {
+  if (!h.length) return '';
+  const max = Math.max(...h.map((x) => x[0]), 1), w = 5, gap = 2;
+  const bars = h.map((x, i) => {
+    const ht = x[1] ? Math.max(3, Math.round((x[0] / max) * 36)) : 36;
+    return `<rect x="${i * (w + gap)}" y="${40 - ht}" width="${w}" height="${ht}" rx="1.5" fill="${x[1] ? '#2ecc8f' : '#ff5d6c'}"><title>${x[1] ? x[0] + ' ms' : 'DOWN'}</title></rect>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${h.length * (w + gap)} 40" preserveAspectRatio="none" height="40" width="100%">${bars}</svg>`;
+}
+
+function ago(t) {
+  if (!t) return 'never';
+  const s = Math.round((Date.now() - t) / 1000);
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
+}
+
+function render(list) {
+  $('#sUp').textContent = list.filter((m) => m.status === 'up').length;
+  $('#sDown').textContent = list.filter((m) => m.status === 'down').length;
+  $('#list').innerHTML = list.length ? list.map((m) => `
+    <div class="card" data-id="${esc(m.id)}">
+      <div class="top">
+        <div><div class="title"><span class="dot ${esc(m.status)}"></span>${esc(m.name)}</div><div class="url">${esc(m.url)}</div></div>
+        <div><button class="ghost" data-a="check">Check now</button> <button class="ghost" data-a="del">Delete</button></div>
+      </div>
+      <div class="stats">
+        <div class="stat"><small>Status</small><b style="color:var(--${m.status === 'down' ? 'bad' : 'ok'})">${esc(m.status.toUpperCase())}</b></div>
+        <div class="stat"><small>Uptime</small><b>${m.uptime === null ? '-' : esc(m.uptime) + '%'}</b></div>
+        <div class="stat"><small>Avg latency</small><b>${m.avgMs === null ? '-' : esc(m.avgMs) + ' ms'}</b></div>
+        <div class="stat"><small>Checks</small><b>${esc(m.checks)}</b></div>
+        <div class="stat"><small>Last check</small><b>${esc(ago(m.lastCheck))}</b></div>
+      </div>
+      ${m.lastError ? `<div class="bad">${esc(m.lastError)}</div>` : ''}
+      ${spark(m.history)}
+    </div>`).join('') : '<p style="color:var(--mute);text-align:center">No monitors yet. Add a URL above to start tracking it.</p>';
+}
+
+async function load() {
+  try {
+    const [list, info] = await Promise.all([api('/monitors'), api('/info')]);
+    $('#sInt').textContent = info.intervalSec;
+    render(list);
+  } catch (e) { /* retry next tick */ }
+}
+
+$('#f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  $('#add').disabled = true; $('#err').textContent = '';
+  try {
+    await api('/monitors', { method: 'POST', body: JSON.stringify({ name: fd.get('name'), url: fd.get('url') }) });
+    e.target.reset(); await load();
+  } catch (err) { $('#err').textContent = err.message; }
+  $('#add').disabled = false;
+});
+
+$('#list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-a]');
+  if (!b) return;
+  const id = b.closest('.card').dataset.id;
+  b.disabled = true;
+  try {
+    if (b.dataset.a === 'del') await api(`/monitors/${id}`, { method: 'DELETE' });
+    else await api(`/monitors/${id}/check`, { method: 'POST' });
+  } catch (err) { $('#err').textContent = err.message; }
+  load();
+});
+
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>
