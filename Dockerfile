@@ -10,3 +10,4 @@ USER appuser
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:%s/healthz' % os.environ.get('PORT','8080'))" || exit 1
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+RUN pip install --no-cache-dir -r requirements.txt
